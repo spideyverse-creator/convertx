@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { convertToPDF } from '@matbee/libreoffice-converter'
 
 const outputTypes = {
   png: 'image/png',
@@ -6,9 +7,12 @@ const outputTypes = {
   webp: 'image/webp',
 }
 
-const supportedInputTypes = new Set([
+const supportedImageTypes = new Set([
   'image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/bmp', 'image/avif',
 ])
+
+// Word/PDF ke liye extensions
+const supportedDocExtensions = ['.doc', '.docx', '.pdf', '.odt', '.rtf']
 
 function formatBytes(bytes) {
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`
@@ -17,12 +21,14 @@ function formatBytes(bytes) {
 
 export default function ConverterSection() {
   const [file, setFile] = useState(null)
+  const [fileType, setFileType] = useState('') // 'image' ya 'doc'
   const [previewUrl, setPreviewUrl] = useState('')
   const [outputFormat, setOutputFormat] = useState('png')
   const [converted, setConverted] = useState(null)
   const [error, setError] = useState('')
   const [isConverting, setIsConverting] = useState(false)
 
+  // Memory cleanup
   useEffect(() => {
     if (!previewUrl) return undefined
     return () => URL.revokeObjectURL(previewUrl)
@@ -38,14 +44,26 @@ export default function ConverterSection() {
     setConverted(null)
     setError('')
 
-    if (!supportedInputTypes.has(nextFile.type)) {
+    const fileExt = nextFile.name.substring(nextFile.name.lastIndexOf('.')).toLowerCase()
+    const isImage = supportedImageTypes.has(nextFile.type)
+    const isDoc = supportedDocExtensions.includes(fileExt)
+
+    if (!isImage && !isDoc) {
       setFile(null)
       setPreviewUrl('')
-      setError('Choose a PNG, JPG, WebP, GIF, BMP, or AVIF image.')
+      setError('Choose an Image (PNG/JPG/WebP) or Document (Word/PDF) file.')
       return
     }
+
     setFile(nextFile)
-    setPreviewUrl(URL.createObjectURL(nextFile))
+    setFileType(isImage ? 'image' : 'doc')
+    
+    // Agar image hai toh preview dikhao
+    if (isImage) {
+      setPreviewUrl(URL.createObjectURL(nextFile))
+    } else {
+      setPreviewUrl('') // Word/PDF ka direct preview nahi bana sakte
+    }
   }
 
   function handleFileChange(event) {
@@ -61,48 +79,72 @@ export default function ConverterSection() {
     if (nextFile) chooseFile(nextFile)
   }
 
-  async function convertImage() {
+  async function convertFile() {
     if (!file) return
     setIsConverting(true)
     setConverted(null)
     setError('')
-    let bitmap
 
-    try {
-      bitmap = await createImageBitmap(file)
-      const canvas = document.createElement('canvas')
-      canvas.width = bitmap.width
-      canvas.height = bitmap.height
+    // 1. IMAGE CONVERSION LOGIC (Browser Canvas)
+    if (fileType === 'image') {
+      let bitmap
+      try {
+        bitmap = await createImageBitmap(file)
+        const canvas = document.createElement('canvas')
+        canvas.width = bitmap.width
+        canvas.height = bitmap.height
 
-      const context = canvas.getContext('2d')
-      if (!context) throw new Error('Your browser could not start the image converter.')
+        const context = canvas.getContext('2d')
+        if (outputFormat === 'jpg') {
+          context.fillStyle = '#ffffff'
+          context.fillRect(0, 0, canvas.width, canvas.height)
+        }
+        context.drawImage(bitmap, 0, 0)
 
-      if (outputFormat === 'jpg') {
-        context.fillStyle = '#ffffff'
-        context.fillRect(0, 0, canvas.width, canvas.height)
+        const blob = await new Promise((resolve) => {
+          canvas.toBlob(resolve, outputTypes[outputFormat], 0.92)
+        })
+
+        if (!blob) throw new Error('Image could not be converted.')
+
+        const baseName = file.name.replace(/\.[^.]+$/, '') || file.name
+        setConverted({
+          url: URL.createObjectURL(blob),
+          name: `${baseName}.${outputFormat}`,
+          size: blob.size,
+        })
+      } catch (err) {
+        setError(err.message || 'Conversion failed.')
+      } finally {
+        bitmap?.close()
+        setIsConverting(false)
       }
+      return
+    }
 
-      context.drawImage(bitmap, 0, 0)
-      const blob = await new Promise((resolve) => {
-        canvas.toBlob(resolve, outputTypes[outputFormat], 0.92)
-      })
-
-      if (!blob) throw new Error('The image could not be converted. Please try another file.')
-      if (blob.type !== outputTypes[outputFormat]) {
-        throw new Error(`${outputFormat.toUpperCase()} export is not supported by this browser.`)
+        // 2. WORD/PDF CONVERSION LOGIC (BentoPDF Engine)
+    if (fileType === 'doc') {
+      try {
+        const arrayBuffer = await file.arrayBuffer()
+        
+        // Engine ko call lagao
+        const pdfBytes = await convertToPDF(new Uint8Array(arrayBuffer))
+        
+        // Result ko Blob mein badlo
+        const blob = new Blob([pdfBytes], { type: 'application/pdf' })
+        const baseName = file.name.replace(/\.[^.]+$/, '') || file.name
+        
+        setConverted({
+          url: URL.createObjectURL(blob),
+          name: `${baseName}.pdf`,
+          size: blob.size,
+        })
+      } catch (err) {
+        setError(err.message || 'Word to PDF conversion failed.')
+      } finally {
+        setIsConverting(false)
       }
-
-      const baseName = file.name.replace(/\.[^.]+$/, '') || file.name
-      setConverted({
-        url: URL.createObjectURL(blob),
-        name: `${baseName}.${outputFormat}`,
-        size: blob.size,
-      })
-    } catch (conversionError) {
-      setError(conversionError instanceof Error ? conversionError.message : 'Conversion failed.')
-    } finally {
-      bitmap?.close()
-      setIsConverting(false)
+      return
     }
   }
 
@@ -111,8 +153,8 @@ export default function ConverterSection() {
       
       <div style={{ textAlign: 'center', marginBottom: '40px' }}>
         <p style={{ color: '#a855f7', letterSpacing: '2px', fontSize: '0.85rem', fontWeight: 'bold' }}>THE CONVERTER</p>
-        <h2 style={{ fontSize: '2.5rem', fontWeight: '800', margin: '10px 0' }}>One image. A format that fits.</h2>
-        <p style={{ color: '#94a3b8' }}>Drop in an image, choose an output, and download the result.</p>
+        <h2 style={{ fontSize: '2.5rem', fontWeight: '800', margin: '10px 0' }}>Convert anything. In seconds.</h2>
+        <p style={{ color: '#94a3b8' }}>Drop in an image or document, choose an output, and download.</p>
       </div>
 
       {/* CONVERTER GLASS CARD */}
@@ -138,7 +180,7 @@ export default function ConverterSection() {
           }}
         >
           <input
-            accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/avif"
+            accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/avif, .doc, .docx, .pdf, .odt, .rtf"
             style={{ display: 'none' }}
             disabled={isConverting}
             id="image-file"
@@ -148,38 +190,50 @@ export default function ConverterSection() {
           {previewUrl ? (
             <img src={previewUrl} alt="Selected" style={{ maxHeight: '150px', borderRadius: '10px', marginBottom: '20px' }} />
           ) : (
-            <div style={{ width: '50px', height: '50px', borderRadius: '50%', background: 'rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px', marginBottom: '15px' }}>+</div>
+            <div style={{ width: '50px', height: '50px', borderRadius: '50%', background: 'rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px', marginBottom: '15px' }}>
+              {fileType === 'doc' ? '📄' : '+'}
+            </div>
           )}
           <span style={{ fontSize: '1.2rem', fontWeight: '600', color: '#fff' }}>
-            {file ? file.name : 'Drop your image here'}
+            {file ? file.name : 'Drop your file here'}
           </span>
           <span style={{ color: '#94a3b8', fontSize: '0.9rem', marginTop: '8px' }}>
-            {file ? `${formatBytes(file.size)} · Click to choose another` : 'or click to browse · PNG, JPG, WebP, GIF, BMP, AVIF'}
+            {file ? `${formatBytes(file.size)} · Click to choose another` : 'or click to browse · Images, Word, PDF'}
           </span>
         </label>
 
         {/* CONTROLS */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '30px', flexWrap: 'wrap', gap: '20px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-            <span style={{ color: '#94a3b8', fontWeight: '500' }}>Convert to</span>
-            <select
-              disabled={isConverting}
-              value={outputFormat}
-              onChange={(e) => { setOutputFormat(e.target.value); setConverted(null); setError(''); }}
-              style={{
-                background: 'rgba(255,255,255,0.05)', color: '#fff', border: '1px solid rgba(255,255,255,0.2)',
-                padding: '10px 20px', borderRadius: '10px', outline: 'none', fontSize: '1rem', cursor: 'pointer'
-              }}
-            >
-              <option value="png" style={{ color: 'black' }}>PNG</option>
-              <option value="jpg" style={{ color: 'black' }}>JPG</option>
-              <option value="webp" style={{ color: 'black' }}>WebP</option>
-            </select>
-          </div>
+          
+          {fileType === 'image' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+              <span style={{ color: '#94a3b8', fontWeight: '500' }}>Convert to</span>
+              <select
+                disabled={isConverting}
+                value={outputFormat}
+                onChange={(e) => { setOutputFormat(e.target.value); setConverted(null); setError(''); }}
+                style={{
+                  background: 'rgba(255,255,255,0.05)', color: '#fff', border: '1px solid rgba(255,255,255,0.2)',
+                  padding: '10px 20px', borderRadius: '10px', outline: 'none', fontSize: '1rem', cursor: 'pointer'
+                }}
+              >
+                <option value="png" style={{ color: 'black' }}>PNG</option>
+                <option value="jpg" style={{ color: 'black' }}>JPG</option>
+                <option value="webp" style={{ color: 'black' }}>WebP</option>
+              </select>
+            </div>
+          )}
+
+          {fileType === 'doc' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+              <span style={{ color: '#94a3b8', fontWeight: '500' }}>Output: </span>
+              <span style={{ color: '#fff', background: 'rgba(168, 85, 247, 0.2)', padding: '8px 16px', borderRadius: '8px' }}>PDF</span>
+            </div>
+          )}
 
           <button
             disabled={!file || isConverting}
-            onClick={convertImage}
+            onClick={convertFile}
             style={{
               padding: '14px 32px', fontSize: '1rem', fontWeight: '600', color: '#fff',
               background: !file ? 'rgba(255,255,255,0.1)' : 'linear-gradient(135deg, #6366f1, #a855f7)',
@@ -187,12 +241,12 @@ export default function ConverterSection() {
               boxShadow: !file ? 'none' : '0 0 20px rgba(168, 85, 247, 0.4)', transition: 'all 0.3s'
             }}
           >
-            {isConverting ? 'Converting…' : 'Convert Image'}
+            {isConverting ? 'Converting…' : 'Convert File'}
           </button>
         </div>
 
         {/* ERROR MESSAGE */}
-        {error && <p style={{ color: '#ef4444', marginTop: '20px', textAlign: 'center' }}>{error}</p>}
+        {error && <p style={{ color: '#ef4444', marginTop: '20px', textAlign: 'center', background: 'rgba(239, 68, 68, 0.1)', padding: '10px', borderRadius: '8px' }}>{error}</p>}
 
         {/* RESULT */}
         {converted && (

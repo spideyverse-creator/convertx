@@ -10,6 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@matbee/libreoffice-converter": "^2.7.2",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
