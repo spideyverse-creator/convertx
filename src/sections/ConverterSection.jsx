@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import { convertDocument } from '@matbee/libreoffice-converter'
 
 const outputTypes = {
   png: 'image/png',
@@ -124,29 +123,10 @@ export default function ConverterSection() {
 
         // 2. WORD/PDF CONVERSION LOGIC (BentoPDF Engine)
         if (fileType === 'doc') {
-      try {
-        const arrayBuffer = await file.arrayBuffer()
-        
-        // Sahi function aur options ke saath call
-        const result = await convertDocument(new Uint8Array(arrayBuffer), { outputFormat: 'pdf' })
-        
-        // Result ab result.data mein aayega, seedha nahi
-        const blob = new Blob([result.data], { type: 'application/pdf' })
-        const baseName = file.name.replace(/\.[^.]+$/, '') || file.name
-        
-        setConverted({
-          url: URL.createObjectURL(blob),
-          name: `${baseName}.pdf`,
-          size: blob.size,
-        })
-      } catch (err) {
-        setError(err.message || 'Word to PDF conversion failed.')
-        console.error(err)
-      } finally {
-        setIsConverting(false)
-      }
-      return
-    }
+  setError('Word/PDF conversion is temporarily unavailable. Please use images for now.')
+  setIsConverting(false)
+  return
+}
   }
 
   return (
